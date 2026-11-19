@@ -33,6 +33,8 @@ type Store interface {
 	// e.g. because the circuit breaker was open).
 	Reschedule(ctx context.Context, id uuid.UUID, reason string, at time.Time, refundAttempt bool) error
 	SetWebhookStatus(ctx context.Context, id uuid.UUID, status string) error
+	// QueueDepth counts jobs not yet finished (queued or processing).
+	QueueDepth(ctx context.Context) (int, error)
 
 	Ping(ctx context.Context) error
 	Close()

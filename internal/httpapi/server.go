@@ -24,6 +24,7 @@ import (
 	"github.com/iAscen/ledgerline/internal/auth"
 	"github.com/iAscen/ledgerline/internal/domain"
 	"github.com/iAscen/ledgerline/internal/jobs"
+	"github.com/iAscen/ledgerline/internal/livestats"
 	"github.com/iAscen/ledgerline/internal/ratelimit"
 	"github.com/iAscen/ledgerline/internal/resilience"
 	"github.com/iAscen/ledgerline/internal/store"
@@ -52,6 +53,7 @@ type Server struct {
 	metrics   *telemetry.Metrics
 	log       *slog.Logger
 	mcp       http.Handler
+	stats     *livestats.Recorder
 	started   time.Time
 	ready     atomic.Bool
 }
@@ -62,6 +64,9 @@ func New(opts Options, svc *jobs.Service, a *auth.Authenticator, lim *ratelimit.
 	return &Server{opts: opts, jobs: svc, auth: a, limiter: lim, demoLimit: ratelimit.New(0.1, 3), breaker: b,
 		store: st, metrics: m, log: log, mcp: mcp, started: time.Now()}
 }
+
+// SetLiveStats enables the public /v1/stats window (nil disables recording).
+func (s *Server) SetLiveStats(r *livestats.Recorder) { s.stats = r }
 
 // SetReady flips readiness (false during startup and shutdown drain).
 func (s *Server) SetReady(v bool) { s.ready.Store(v) }
@@ -75,6 +80,8 @@ func (s *Server) Handler() http.Handler {
 	route("GET /readyz", s.readyz)
 	route("GET /v1/status", s.cors(s.status))
 	route("OPTIONS /v1/status", s.cors(func(http.ResponseWriter, *http.Request) {}))
+	route("GET /v1/stats", s.cors(s.liveStats))
+	route("OPTIONS /v1/stats", s.cors(func(http.ResponseWriter, *http.Request) {}))
 	route("GET /{$}", s.demoPage)
 	route("GET /openapi.yaml", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/yaml")
@@ -164,6 +171,36 @@ func (s *Server) status(w http.ResponseWriter, _ *http.Request) {
 		"store":           s.opts.StoreKind,
 		"circuit_breaker": s.breaker.State().String(),
 		"region":          os.Getenv("FLY_REGION"),
+	})
+}
+
+// liveStats serves the public, read-only traffic window used by the portfolio
+// status panel. Numbers are computed from real requests served by this
+// instance; nothing is sampled or synthesized.
+func (s *Server) liveStats(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	snap := s.stats.Snapshot()
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	var depth *int
+	if n, err := s.store.QueueDepth(ctx); err == nil {
+		depth = &n
+	} else {
+		s.log.WarnContext(r.Context(), "queue depth", "err", err)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"service":            "ledgerline",
+		"generated_at":       time.Now().UTC(),
+		"uptime_seconds":     int(time.Since(s.started).Seconds()),
+		"window_seconds":     snap.WindowSeconds,
+		"requests_per_min":   snap.RequestsPerMin,
+		"requests_in_window": snap.RequestsWindow,
+		"p50_ms":             snap.P50Ms,
+		"error_rate":         snap.ErrorRate,
+		"queue_depth":        depth,
+		"circuit_breaker":    s.breaker.State().String(),
+		"provider":           s.opts.Provider,
+		"events":             snap.Events,
 	})
 }
 
@@ -361,7 +398,28 @@ func (s *Server) instrument(pattern string, next http.Handler) http.Handler {
 		}
 		s.metrics.HTTPRequests.WithLabelValues(pattern, r.Method, strconv.Itoa(rec.code)).Inc()
 		s.metrics.HTTPDuration.WithLabelValues(pattern, r.Method).Observe(time.Since(start).Seconds())
+		if s.stats != nil && countsForLiveStats(pattern, r.Method) {
+			route := pattern
+			if !strings.Contains(pattern, " ") {
+				route = r.Method + " " + pattern // method-less patterns such as "/mcp"
+			}
+			s.stats.RecordRequest(route, rec.code, time.Since(start))
+		}
 	})
+}
+
+// countsForLiveStats keeps probes, polling and preflights out of the public
+// window so it reflects real API use. The catch-all "/" (404s from scanners)
+// is excluded too, so random URLs cannot write into the public event feed.
+func countsForLiveStats(pattern, method string) bool {
+	if method == http.MethodOptions {
+		return false
+	}
+	switch pattern {
+	case "GET /healthz", "GET /readyz", "GET /v1/status", "GET /v1/stats", "/":
+		return false
+	}
+	return true
 }
 
 func (s *Server) accessLog(next http.Handler) http.Handler {

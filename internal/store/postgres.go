@@ -208,6 +208,13 @@ func (p *Postgres) Exec(ctx context.Context, sql string, args ...any) (int64, er
 	return tag.RowsAffected(), err
 }
 
+// QueueDepth implements Store. Served by the jobs_claimable partial index.
+func (p *Postgres) QueueDepth(ctx context.Context) (int, error) {
+	var n int
+	err := p.pool.QueryRow(ctx, `SELECT count(*) FROM jobs WHERE status IN ('queued', 'processing')`).Scan(&n)
+	return n, err
+}
+
 // Ping implements Store.
 func (p *Postgres) Ping(ctx context.Context) error { return p.pool.Ping(ctx) }
 

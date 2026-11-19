@@ -18,6 +18,7 @@ import (
 	"github.com/iAscen/ledgerline/internal/extract"
 	"github.com/iAscen/ledgerline/internal/httpapi"
 	"github.com/iAscen/ledgerline/internal/jobs"
+	"github.com/iAscen/ledgerline/internal/livestats"
 	"github.com/iAscen/ledgerline/internal/mcpserver"
 	"github.com/iAscen/ledgerline/internal/ratelimit"
 	"github.com/iAscen/ledgerline/internal/resilience"
@@ -118,6 +119,11 @@ func New(ctx context.Context, cfg config.Config, sec secrets.Secrets, version st
 		PublicDemo: cfg.PublicDemo, MaxBody: cfg.MaxDocumentBytes*4/3 + 64<<10,
 	}, svc, a.Auth, ratelimit.New(cfg.RateLimitRPS, cfg.RateLimitBurst), a.Breaker, a.Store, a.Metrics, log,
 		mcpserver.NewHandler(svc, version))
+
+	// Public, read-only traffic window for /v1/stats (bounded, no tenant data).
+	live := livestats.New()
+	a.API.SetLiveStats(live)
+	a.Pool.SetLiveStats(live)
 	return a, nil
 }
 

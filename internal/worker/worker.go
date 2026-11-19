@@ -17,6 +17,7 @@ import (
 
 	"github.com/iAscen/ledgerline/internal/domain"
 	"github.com/iAscen/ledgerline/internal/extract"
+	"github.com/iAscen/ledgerline/internal/livestats"
 	"github.com/iAscen/ledgerline/internal/resilience"
 	"github.com/iAscen/ledgerline/internal/store"
 	"github.com/iAscen/ledgerline/internal/telemetry"
@@ -49,6 +50,7 @@ type Pool struct {
 	log      *slog.Logger
 	wake     chan struct{}
 	now      func() time.Time
+	events   *livestats.Recorder
 }
 
 // New builds a Pool.
@@ -125,6 +127,14 @@ func (p *Pool) loop(ctx context.Context, id int) {
 	}
 }
 
+// SetLiveStats makes the pool report job outcomes to the public event feed.
+func (p *Pool) SetLiveStats(r *livestats.Recorder) { p.events = r }
+
+// jobEvent publishes a fixed-vocabulary outcome; never error text or document data.
+func (p *Pool) jobEvent(job domain.Job, outcome string, attempts int) {
+	p.events.RecordJob(job.ID.String()[:8], outcome, attempts)
+}
+
 // Process runs one claimed job to a terminal or rescheduled state. Exported
 // for tests that drive the pipeline deterministically.
 func (p *Pool) Process(ctx context.Context, job domain.Job) {
@@ -165,6 +175,7 @@ func (p *Pool) Process(ctx context.Context, job domain.Job) {
 			return // lease expiry will retry the job
 		}
 		job.Status, job.Result, job.Error = domain.StatusSucceeded, &receipt, ""
+		p.jobEvent(job, "succeeded", job.Attempts)
 		p.finished(ctx, sctx, job, log)
 
 	case errors.Is(err, resilience.ErrOpen):
@@ -175,6 +186,7 @@ func (p *Pool) Process(ctx context.Context, job domain.Job) {
 		if serr := p.store.Reschedule(sctx, job.ID, "provider circuit open", at, true); serr != nil {
 			log.ErrorContext(ctx, "reschedule", "err", serr)
 		}
+		p.jobEvent(job, "waiting: circuit open", 0)
 
 	case extract.IsPermanent(err):
 		span.SetStatus(codes.Error, err.Error())
@@ -183,6 +195,7 @@ func (p *Pool) Process(ctx context.Context, job domain.Job) {
 			return
 		}
 		job.Status, job.Error = domain.StatusFailed, err.Error()
+		p.jobEvent(job, "rejected", job.Attempts)
 		p.finished(ctx, sctx, job, log)
 
 	case job.Attempts >= p.cfg.MaxAttempts:
@@ -193,6 +206,7 @@ func (p *Pool) Process(ctx context.Context, job domain.Job) {
 			return
 		}
 		job.Status, job.Error = domain.StatusFailed, reason
+		p.jobEvent(job, "failed", job.Attempts)
 		p.finished(ctx, sctx, job, log)
 
 	default:
@@ -202,6 +216,7 @@ func (p *Pool) Process(ctx context.Context, job domain.Job) {
 		if serr := p.store.Reschedule(sctx, job.ID, err.Error(), p.now().Add(delay), false); serr != nil {
 			log.ErrorContext(ctx, "reschedule", "err", serr)
 		}
+		p.jobEvent(job, "retrying", job.Attempts)
 	}
 }
 

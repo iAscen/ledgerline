@@ -117,6 +117,39 @@ func Run(t *testing.T, factory func(t *testing.T) store.Store) {
 		}
 	})
 
+	t.Run("queue depth counts queued and processing, not finished", func(t *testing.T) {
+		s := factory(t)
+		depth := func() int {
+			t.Helper()
+			n, err := s.QueueDepth(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return n
+		}
+		if d := depth(); d != 0 {
+			t.Fatalf("empty store depth = %d, want 0", d)
+		}
+		a, _, _ := s.CreateJob(ctx, newJob("t", "qa", "h"))
+		_, _, _ = s.CreateJob(ctx, newJob("t", "qb", "h"))
+		if d := depth(); d != 2 {
+			t.Fatalf("two queued: depth = %d, want 2", d)
+		}
+		c, err := s.ClaimNext(ctx, time.Minute)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d := depth(); d != 2 {
+			t.Fatalf("one processing + one queued: depth = %d, want 2", d)
+		}
+		if err := s.Fail(ctx, c.ID, "boom"); err != nil {
+			t.Fatal(err)
+		}
+		if d := depth(); d != 1 {
+			t.Fatalf("after a terminal state: depth = %d, want 1 (job %s)", d, a.ID)
+		}
+	})
+
 	t.Run("reschedule and refund", func(t *testing.T) {
 		s := factory(t)
 		j, _, _ := s.CreateJob(ctx, newJob("t", "k", "h"))

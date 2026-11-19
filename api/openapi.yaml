@@ -152,6 +152,44 @@ paths:
                   store: { type: string, enum: [postgres, memory] }
                   circuit_breaker: { type: string, enum: [closed, open, half_open] }
                   region: { type: string }
+  /v1/stats:
+    get:
+      tags: [operations]
+      operationId: liveStats
+      summary: Public rolling traffic window (CORS-enabled; used by the portfolio status panel)
+      description: >
+        Computed in-process from real requests served by this instance. Excludes health
+        probes, status/stats polling and CORS preflights. Latency and error rate are null
+        when no requests fell inside the window. Events contain route patterns and fixed
+        outcome words only: no IPs, tokens, tenant IDs or document data.
+      security: []
+      responses:
+        "200":
+          description: Current window.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  service: { type: string }
+                  generated_at: { type: string, format: date-time }
+                  uptime_seconds: { type: integer }
+                  window_seconds: { type: integer }
+                  requests_per_min: { type: integer }
+                  requests_in_window: { type: integer }
+                  p50_ms: { type: [number, "null"] }
+                  error_rate: { type: [number, "null"], description: Share of 5xx responses in the window. }
+                  queue_depth: { type: [integer, "null"] }
+                  circuit_breaker: { type: string, enum: [closed, open, half_open] }
+                  provider: { type: string, enum: [fake, anthropic] }
+                  events:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        at: { type: string, format: date-time }
+                        kind: { type: string, enum: [http, job] }
+                        text: { type: string }
   /healthz:
     get:
       tags: [operations]

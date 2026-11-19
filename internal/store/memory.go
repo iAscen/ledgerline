@@ -168,3 +168,16 @@ func (m *Memory) Ping(context.Context) error { return nil }
 
 // Close implements Store.
 func (m *Memory) Close() {}
+
+// QueueDepth implements Store.
+func (m *Memory) QueueDepth(_ context.Context) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for _, mj := range m.jobs {
+		if mj.job.Status == domain.StatusQueued || mj.job.Status == domain.StatusProcessing {
+			n++
+		}
+	}
+	return n, nil
+}
