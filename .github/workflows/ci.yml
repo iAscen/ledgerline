@@ -62,7 +62,7 @@ jobs:
       # chart-testing's schema validator (yamale) crashes on Python 3.14, the runner default.
       - uses: actions/setup-python@v6
         with: { python-version: "3.12" }
-      - uses: helm/chart-testing-action@v2.7.0
+      - uses: helm/chart-testing-action@v2.9.0
       - name: chart-testing lint
         run: ct lint --config ct.yaml --all
 
