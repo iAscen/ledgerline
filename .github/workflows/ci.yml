@@ -20,7 +20,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
         with: { go-version-file: go.mod }
       - uses: golangci/golangci-lint-action@v8
@@ -33,7 +33,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
         with: { go-version-file: go.mod }
       - name: go test (unit + Postgres via testcontainers, race detector)
@@ -47,7 +47,7 @@ jobs:
   vuln:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
         with: { go-version-file: go.mod }
       - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
@@ -55,7 +55,7 @@ jobs:
   helm:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with: { fetch-depth: 0 }
       - uses: azure/setup-helm@v4
       - run: make helm-lint
@@ -73,7 +73,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v3
       - id: meta
         uses: docker/metadata-action@v5
@@ -136,7 +136,7 @@ jobs:
       # Overrides the workflow-level GHCR name, which is for publishing (and is not lowercase).
       IMAGE: ledgerline:dev
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: azure/setup-helm@v4
       - uses: helm/kind-action@v1
         with:
