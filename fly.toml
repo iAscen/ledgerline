@@ -1,0 +1,49 @@
+# Fly.io deployment for the public demo.
+#   fly launch --no-deploy --copy-config   (pick your own app name)
+#   fly secrets set LEDGERLINE_JWT_SECRET=$(openssl rand -hex 32) LEDGERLINE_WEBHOOK_SECRET=$(openssl rand -hex 32)
+#   fly deploy
+# The demo runs the in-memory store and the fake provider, so it costs nothing
+# beyond one small machine and never spends Anthropic credits. To make it
+# durable: attach Postgres and set LEDGERLINE_STORE=postgres + LEDGERLINE_DATABASE_URL.
+app = "ledgerline"
+primary_region = "yul" # Montréal
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  LEDGERLINE_STORE = "memory"
+  LEDGERLINE_PROVIDER = "fake"
+  LEDGERLINE_PUBLIC_DEMO = "true"
+  LEDGERLINE_CORS_ORIGINS = "*"
+  LEDGERLINE_RATE_LIMIT_RPS = "1"
+  LEDGERLINE_RATE_LIMIT_BURST = "5"
+  LEDGERLINE_MAX_DOCUMENT_BYTES = "1048576"
+  LEDGERLINE_BREAKER_THRESHOLD = "3"
+  LEDGERLINE_BREAKER_OPEN_TIMEOUT = "30s"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 50
+    hard_limit = 100
+
+  [[http_service.checks]]
+    method = "GET"
+    path = "/healthz"
+    interval = "15s"
+    timeout = "3s"
+    grace_period = "5s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
+
+[metrics]
+  port = 9090
+  path = "/metrics"

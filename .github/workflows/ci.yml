@@ -1,0 +1,150 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with: { go-version-file: go.mod }
+      - uses: golangci/golangci-lint-action@v8
+        with: { version: v2.15.0 }
+      - name: sqlc generated code is up to date
+        uses: sqlc-dev/setup-sqlc@v4
+        with: { sqlc-version: "1.31.1" }
+      - run: sqlc diff
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with: { go-version-file: go.mod }
+      - name: go test (unit + Postgres via testcontainers, race detector)
+        env:
+          LEDGERLINE_REQUIRE_DOCKER: "1" # the Postgres contract must run, never skip, in CI
+        run: go test -race -count=1 -coverprofile=coverage.out ./...
+      - run: go tool cover -func=coverage.out | tail -1
+      - uses: actions/upload-artifact@v4
+        with: { name: coverage, path: coverage.out }
+
+  vuln:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with: { go-version-file: go.mod }
+      - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with: { fetch-depth: 0 }
+      - uses: azure/setup-helm@v4
+      - run: make helm-lint
+      - uses: helm/chart-testing-action@v2.7.0
+      - name: chart-testing lint
+        run: ct lint --config ct.yaml --all
+
+  image:
+    needs: [lint, test, vuln]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=sha
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+      - name: Build (load locally for scanning)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: ledgerline:scan
+          build-args: VERSION=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Trivy image scan (fail on fixable HIGH/CRITICAL)
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          image-ref: ledgerline:scan
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+      - uses: azure/setup-helm@v4
+      - name: Render the Helm chart for scanning
+        run: mkdir -p rendered && helm template ledgerline charts/ledgerline > rendered/ledgerline.yaml
+      - name: Trivy config scan (Dockerfile + rendered Kubernetes manifests)
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          scan-type: config
+          scan-ref: .
+          skip-dirs: deploy/kind # demo-only Postgres/Vault manifests for the throwaway kind cluster
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+      - if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - if: github.event_name == 'push'
+        name: Push to GHCR
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: VERSION=${{ github.sha }}
+          cache-from: type=gha
+
+  e2e-kind:
+    needs: [helm, test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - uses: azure/setup-helm@v4
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: ledgerline
+          config: deploy/kind/cluster.yaml
+      - name: Postgres + Vault (official chart, Kubernetes auth)
+        run: make kind-up
+      - name: Build, load and helm install (+ helm test)
+        run: make deploy
+      - name: Smoke test through the Service (idempotency, breaker, Vault-sourced secrets)
+        run: make e2e
+      - name: Diagnostics
+        if: failure()
+        run: |
+          kubectl get all -A
+          kubectl -n ledgerline describe pods
+          kubectl -n ledgerline logs deploy/ledgerline --all-containers --tail=200 || true
+          kubectl -n vault logs vault-0 --tail=100 || true

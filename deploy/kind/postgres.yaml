@@ -1,0 +1,62 @@
+# Single-instance Postgres for the kind demo cluster only. In a real
+# environment this is a managed database (Azure Database for PostgreSQL,
+# RDS, Cloud SQL) or an operator such as CloudNativePG.
+# The password lives in a Secret that only Postgres reads; ledgerline gets its
+# DSN from Vault (see scripts/vault-setup.sh), never from this Secret.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres
+  namespace: ledgerline
+type: Opaque
+stringData:
+  POSTGRES_PASSWORD: kind-only-password
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: ledgerline
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels: { app: postgres }
+  template:
+    metadata:
+      labels: { app: postgres }
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:17-alpine
+          env:
+            - { name: POSTGRES_DB, value: ledgerline }
+            - { name: POSTGRES_USER, value: ledgerline }
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: postgres, key: POSTGRES_PASSWORD } }
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          ports:
+            - { name: pg, containerPort: 5432 }
+          readinessProbe:
+            exec: { command: [pg_isready, -U, ledgerline, -d, ledgerline] }
+            periodSeconds: 2
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { memory: 512Mi }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql/data }
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources: { requests: { storage: 1Gi } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: ledgerline
+spec:
+  selector: { app: postgres }
+  ports:
+    - { name: pg, port: 5432, targetPort: pg }

@@ -1,0 +1,33 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ledgerline.fullname" . }}
+  labels:
+    {{- include "ledgerline.labels" . | nindent 4 }}
+data:
+  LEDGERLINE_STORE: {{ .Values.config.store | quote }}
+  LEDGERLINE_PROVIDER: {{ .Values.config.provider | quote }}
+  LEDGERLINE_ANTHROPIC_MODEL: {{ .Values.config.anthropicModel | quote }}
+  LEDGERLINE_WORKER_CONCURRENCY: {{ .Values.config.workerConcurrency | quote }}
+  LEDGERLINE_JOB_TIMEOUT: {{ .Values.config.jobTimeout | quote }}
+  LEDGERLINE_MAX_ATTEMPTS: {{ .Values.config.maxAttempts | quote }}
+  LEDGERLINE_BREAKER_THRESHOLD: {{ .Values.config.breakerThreshold | quote }}
+  LEDGERLINE_BREAKER_OPEN_TIMEOUT: {{ .Values.config.breakerOpenTimeout | quote }}
+  LEDGERLINE_RATE_LIMIT_RPS: {{ .Values.config.rateLimitRPS | quote }}
+  LEDGERLINE_RATE_LIMIT_BURST: {{ .Values.config.rateLimitBurst | quote }}
+  LEDGERLINE_CORS_ORIGINS: {{ .Values.config.corsOrigins | quote }}
+  LEDGERLINE_PUBLIC_DEMO: {{ .Values.config.publicDemo | quote }}
+  LEDGERLINE_LOG_LEVEL: {{ .Values.config.logLevel | quote }}
+  LEDGERLINE_SHUTDOWN_TIMEOUT: {{ .Values.config.shutdownTimeout | quote }}
+  LEDGERLINE_READINESS_DRAIN: {{ .Values.config.readinessDrain | quote }}
+  {{- with .Values.config.otlpEndpoint }}
+  OTEL_EXPORTER_OTLP_ENDPOINT: {{ . | quote }}
+  {{- end }}
+  {{- if .Values.vault.enabled }}
+  LEDGERLINE_VAULT_ADDR: {{ .Values.vault.address | quote }}
+  LEDGERLINE_VAULT_ROLE: {{ .Values.vault.role | quote }}
+  LEDGERLINE_VAULT_AUTH_MOUNT: {{ .Values.vault.authMount | quote }}
+  LEDGERLINE_VAULT_KV_MOUNT: {{ .Values.vault.kvMount | quote }}
+  LEDGERLINE_VAULT_KV_PATH: {{ .Values.vault.kvPath | quote }}
+  LEDGERLINE_VAULT_REQUIRED: {{ .Values.vault.required | quote }}
+  {{- end }}

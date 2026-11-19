@@ -1,0 +1,14 @@
+# Official HashiCorp Vault chart in dev mode: in-memory, auto-unsealed, root
+# token "root". For the kind demo only; production uses HA Raft with auto-unseal.
+server:
+  dev:
+    enabled: true
+    devRootToken: root
+  # Lets Vault call the TokenReview API to validate pod service account tokens.
+  authDelegator:
+    enabled: true
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { memory: 256Mi }
+injector:
+  enabled: false # the app reads Vault directly; no sidecar needed

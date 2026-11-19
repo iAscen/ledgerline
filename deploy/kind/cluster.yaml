@@ -1,0 +1,9 @@
+# kind cluster for local Kubernetes and the CI e2e job.
+# Two workers so topologySpreadConstraints and the PDB have something to do.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: ledgerline
+nodes:
+  - role: control-plane
+  - role: worker
+  - role: worker

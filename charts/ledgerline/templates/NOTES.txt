@@ -1,0 +1,8 @@
+ledgerline {{ .Chart.AppVersion }} is deployed as {{ include "ledgerline.fullname" . }}.
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "ledgerline.fullname" . }} 8080:{{ .Values.service.port }}
+  curl http://localhost:8080/v1/status
+
+Mint a token from inside a pod (secrets come from {{ if .Values.vault.enabled }}Vault{{ else }}the configured Secret{{ end }}):
+
+  kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "ledgerline.fullname" . }} -- ledgerline token -tenant demo
