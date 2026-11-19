@@ -189,8 +189,12 @@ curl -s localhost:8080/v1/jobs/<id> -H "Authorization: Bearer $TOKEN"
 ```
 
 **Forcing failures.** With the fake provider, a document containing
-`LEDGERLINE_FAIL` fails transiently (retried, counts toward the breaker) and
-`LEDGERLINE_REJECT` fails permanently. `CHECK_BREAKER=1 scripts/smoke.sh`
+`LEDGERLINE_FAIL` fails transiently once (counts toward the breaker) and then
+permanently on any retry, and `LEDGERLINE_REJECT` fails permanently. The
+"once" matters on the shared public demo: test documents that kept failing
+would win the breaker's half-open probes and hold it open for minutes, stalling
+other visitors' receipts. This way the first probe gets an answer and the
+breaker closes about one open timeout after a test. `CHECK_BREAKER=1 scripts/smoke.sh`
 uses this to open the breaker and checks that `/v1/status` reports it while
 `/readyz` stays green.
 

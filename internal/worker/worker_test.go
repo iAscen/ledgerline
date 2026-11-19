@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"sync"
@@ -101,8 +102,9 @@ func TestPipelineSuccessDeliversWebhook(t *testing.T) {
 }
 
 func TestTransientFailureRetriesThenGivesUp(t *testing.T) {
-	h := newHarness(t, 100) // keep the breaker out of this test
-	id := h.submit(t, "LEDGERLINE_FAIL")
+	h := newHarness(t, 100)                 // keep the breaker out of this test
+	h.pool.provider = extract.NewFake(0, 1) // every call fails transiently
+	id := h.submit(t, "a receipt")
 	for i := 1; i <= 2; i++ {
 		h.step(t)
 		j := h.job(t, id)
@@ -126,7 +128,7 @@ func TestForcedProviderFailuresOpenTheBreaker(t *testing.T) {
 	h.pool.cfg.Backoff = resilience.Backoff{Base: time.Hour, Max: time.Hour, Jitter: func(d time.Duration) time.Duration { return d }}
 	var ids []uuid.UUID
 	for i := 0; i < 5; i++ {
-		ids = append(ids, h.submit(t, "LEDGERLINE_FAIL"))
+		ids = append(ids, h.submit(t, fmt.Sprintf("LEDGERLINE_FAIL %d", i)))
 	}
 	for i := 0; i < 5; i++ {
 		h.step(t)
@@ -193,5 +195,32 @@ func TestRunDrainsQueueAndStopsOnCancel(t *testing.T) {
 		if s := h.job(t, id).Status; s != domain.StatusSucceeded {
 			t.Fatalf("job %s status %s", id, s)
 		}
+	}
+}
+
+// An outage test must not hold the breaker open: once it has tripped, the
+// first half-open probe gets a permanent answer for the test document, which
+// closes the breaker so other jobs flow again.
+func TestOutageTestJobsLetTheBreakerRecover(t *testing.T) {
+	h := newHarness(t, 1)
+	h.breaker = resilience.NewBreaker(resilience.BreakerConfig{FailureThreshold: 1, OpenTimeout: 10 * time.Millisecond, IsFailure: IsBreakerFailure})
+	h.pool.breaker = h.breaker
+	outage := h.submit(t, "LEDGERLINE_FAIL demo")
+	h.step(t)
+	if h.breaker.State() != resilience.StateOpen {
+		t.Fatalf("breaker should open, got %s", h.breaker.State())
+	}
+	time.Sleep(20 * time.Millisecond) // past the open timeout: next call is the probe
+	h.step(t)
+	if s := h.breaker.State(); s != resilience.StateClosed {
+		t.Fatalf("probe on the outage document should close the breaker, got %s", s)
+	}
+	if j := h.job(t, outage); j.Status != domain.StatusFailed {
+		t.Fatalf("outage test job should end failed, got %s", j.Status)
+	}
+	normal := h.submit(t, "a visitor's receipt")
+	h.step(t)
+	if j := h.job(t, normal); j.Status != domain.StatusSucceeded {
+		t.Fatalf("visitor job should succeed after recovery, got %s (%s)", j.Status, j.Error)
 	}
 }

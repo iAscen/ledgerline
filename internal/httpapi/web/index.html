@@ -118,7 +118,7 @@
       <h2>3 · Break the AI provider</h2>
       <p class="note">Sends documents that make the simulated provider fail like an outage. After a few consecutive
         failures the <strong>circuit breaker opens</strong>: calls stop, jobs wait in the queue without burning retries,
-        and the API stays up. Then it probes and recovers on its own.</p>
+        and the API stays up. About 20 seconds later it lets one probe through and recovers on its own.</p>
       <div class="row"><button id="outage">Simulate provider outage</button></div>
       <div class="log mono" id="outageLog"></div>
     </section>
@@ -336,7 +336,7 @@
           body: JSON.stringify({ document_base64: b64, media_type: "image/png" }) });
         log(`job ${i + 1} accepted (HTTP ${r.status}): the API keeps accepting work`);
       }
-      let last = null;
+      let last = null, sawOpen = false;
       for (let i = 0; i < 120; i++) {
         const cb = await refreshStatus();
         if (cb && cb !== last) {
@@ -345,13 +345,16 @@
                 half_open: "breaker HALF-OPEN: letting one probe request through" }[cb]);
           last = cb;
         }
-        if (cb === "open") {
+        if (cb === "open" && !sawOpen) {
+          sawOpen = true;
           const r = await fetch("/readyz"); log(`/readyz → ${r.status}: pods stay in rotation, no cascading outage`);
+        }
+        if (sawOpen && cb === "closed") {
+          log("recovered: the probe got an answer, so the breaker closed and queued receipts flow again");
           break;
         }
         await sleep(1000);
       }
-      log("these test documents always fail, so the 4 jobs end as failed after 3 attempts; in a real outage the next probe succeeds, the breaker closes and the queue drains");
     } catch (e) { log("error: " + e.message); }
     finally { setTimeout(() => ($("outage").disabled = false), 15000); }
   });

@@ -226,7 +226,7 @@ func TestBreakerOpensUnderForcedFailuresAndIsVisible(t *testing.T) {
 	e := newEnv(t, func(c *config.Config) { c.BreakerThreshold, c.BreakerOpenTimeout = 2, time.Hour })
 	tok := e.token("acme")
 	for i := 0; i < 4; i++ {
-		e.do("POST", "/v1/jobs", tok, map[string]string{"Idempotency-Key": "fail-" + string(rune('a'+i))}, jobBody(png("LEDGERLINE_FAIL")))
+		e.do("POST", "/v1/jobs", tok, map[string]string{"Idempotency-Key": "fail-" + string(rune('a'+i))}, jobBody(png("LEDGERLINE_FAIL "+string(rune('a'+i)))))
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for e.app.Breaker.State().String() != "open" && time.Now().Before(deadline) {

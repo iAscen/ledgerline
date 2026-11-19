@@ -37,6 +37,21 @@ func TestFakeFailureMarkers(t *testing.T) {
 	if !errors.Is(err, ErrFakeUnavailable) || IsPermanent(err) {
 		t.Fatalf("want transient failure, got %v", err)
 	}
+	// The same outage document fails permanently afterwards, so it cannot keep
+	// winning half-open probes and hold the breaker open.
+	_, err = f.Extract(context.Background(), Document{Data: []byte("xx LEDGERLINE_FAIL xx")})
+	if !IsPermanent(err) {
+		t.Fatalf("second attempt on an outage document: want permanent, got %v", err)
+	}
+	if _, err = f.Extract(context.Background(), Document{Data: []byte("other LEDGERLINE_FAIL")}); !errors.Is(err, ErrFakeUnavailable) {
+		t.Fatalf("a different outage document must fail transiently first, got %v", err)
+	}
+	always := NewFake(0, 1)
+	for i := 0; i < 3; i++ {
+		if _, err := always.Extract(context.Background(), Document{Data: []byte("normal")}); !errors.Is(err, ErrFakeUnavailable) {
+			t.Fatalf("FailureRate=1 must always fail transiently, got %v", err)
+		}
+	}
 	_, err = f.Extract(context.Background(), Document{Data: []byte("LEDGERLINE_REJECT")})
 	if !IsPermanent(err) {
 		t.Fatalf("want permanent failure, got %v", err)

@@ -15,6 +15,12 @@ import (
 
 // Magic markers let a caller force failure modes end to end (curl, CI e2e,
 // the live demo) without restarting the service.
+//
+// A document carrying MarkerTransientFailure fails like an outage once, which
+// is enough to trip the circuit breaker. Every later attempt on the same
+// document fails permanently instead. Without that, the test jobs would keep
+// retrying, win the breaker's half-open probes, and hold the breaker open for
+// minutes, delaying real jobs submitted by other demo visitors.
 var (
 	MarkerTransientFailure = []byte("LEDGERLINE_FAIL")
 	MarkerPermanentFailure = []byte("LEDGERLINE_REJECT")
@@ -29,13 +35,19 @@ type Fake struct {
 	Latency     time.Duration
 	FailureRate float64 // 0..1, probability of a transient failure
 
-	mu  sync.Mutex
-	rng *rand.Rand
+	mu      sync.Mutex
+	rng     *rand.Rand
+	outages map[[32]byte]struct{} // marker documents that already failed once
 }
 
 // NewFake returns a fake provider.
 func NewFake(latency time.Duration, failureRate float64) *Fake {
-	return &Fake{Latency: latency, FailureRate: failureRate, rng: rand.New(rand.NewPCG(1, 2))} //nolint:gosec // simulation only
+	return &Fake{
+		Latency:     latency,
+		FailureRate: failureRate,
+		rng:         rand.New(rand.NewPCG(1, 2)), //nolint:gosec // simulation only, not security-sensitive
+		outages:     map[[32]byte]struct{}{},
+	}
 }
 
 // Name implements Provider.
@@ -55,11 +67,17 @@ func (f *Fake) Extract(ctx context.Context, doc Document) (domain.Receipt, error
 	if bytes.Contains(doc.Data, MarkerPermanentFailure) {
 		return domain.Receipt{}, Permanent("document is not a receipt")
 	}
-	if bytes.Contains(doc.Data, MarkerTransientFailure) || f.roll() {
+	sum := sha256.Sum256(doc.Data)
+	if bytes.Contains(doc.Data, MarkerTransientFailure) {
+		if f.firstOutage(sum) {
+			return domain.Receipt{}, ErrFakeUnavailable
+		}
+		return domain.Receipt{}, Permanent("simulated outage test document discarded after its first failure")
+	}
+	if f.roll() {
 		return domain.Receipt{}, ErrFakeUnavailable
 	}
 
-	sum := sha256.Sum256(doc.Data)
 	seed := binary.BigEndian.Uint64(sum[:8])
 	merchants := []string{"Café Olimpico", "Marché Jean-Talon", "Librairie Drawn & Quarterly", "Dépanneur Le Pick-up", "Fairmount Bagel"}
 	categories := []string{"meals", "groceries", "office_supplies", "meals", "meals"}
@@ -80,6 +98,20 @@ func (f *Fake) Extract(ctx context.Context, doc Document) (domain.Receipt, error
 		Confidence:    0.99,
 		Provider:      f.Name(),
 	}, nil
+}
+
+// firstOutage records sum and reports whether this is its first failure.
+func (f *Fake) firstOutage(sum [32]byte) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, seen := f.outages[sum]; seen {
+		return false
+	}
+	if len(f.outages) >= 10000 { // bound memory on a long-running public demo
+		clear(f.outages)
+	}
+	f.outages[sum] = struct{}{}
+	return true
 }
 
 func (f *Fake) roll() bool {
