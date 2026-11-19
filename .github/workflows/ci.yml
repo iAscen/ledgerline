@@ -41,7 +41,7 @@ jobs:
           LEDGERLINE_REQUIRE_DOCKER: "1" # the Postgres contract must run, never skip, in CI
         run: go test -race -count=1 -coverprofile=coverage.out ./...
       - run: go tool cover -func=coverage.out | tail -1
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with: { name: coverage, path: coverage.out }
 
   vuln:
