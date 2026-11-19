@@ -4,7 +4,7 @@ replicaCount: 2
 
 image:
   repository: ghcr.io/iascen/ledgerline
-  tag: "" # defaults to .Chart.AppVersion
+  tag: ""  # defaults to .Chart.AppVersion
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []
@@ -29,7 +29,7 @@ service:
 # Non-secret configuration, rendered into a ConfigMap (LEDGERLINE_* env vars).
 config:
   store: postgres
-  provider: fake # fake | anthropic
+  provider: fake  # fake | anthropic
   anthropicModel: claude-opus-5-5
   workerConcurrency: "4"
   jobTimeout: 2m
@@ -43,7 +43,7 @@ config:
   logLevel: info
   shutdownTimeout: 25s
   readinessDrain: 5s
-  otlpEndpoint: "" # e.g. http://otel-collector.observability:4318
+  otlpEndpoint: ""  # e.g. http://otel-collector.observability:4318
 
 # Secrets come from Vault (preferred) and/or an existing Kubernetes Secret
 # whose keys are LEDGERLINE_JWT_SECRET, LEDGERLINE_DATABASE_URL, ... (env fallback).
@@ -62,7 +62,7 @@ resources:
     cpu: 100m
     memory: 64Mi
   limits:
-    memory: 256Mi # no CPU limit: avoids CFS throttling; requests drive scheduling and HPA
+    memory: 256Mi  # no CPU limit: avoids CFS throttling; requests drive scheduling and HPA
 
 autoscaling:
   enabled: true
@@ -93,15 +93,15 @@ securityContext:
 
 probes:
   startup:
-    httpGet: { path: /healthz, port: http }
+    httpGet: {path: /healthz, port: http}
     periodSeconds: 2
     failureThreshold: 30
   liveness:
-    httpGet: { path: /healthz, port: http }
+    httpGet: {path: /healthz, port: http}
     periodSeconds: 10
     failureThreshold: 3
   readiness:
-    httpGet: { path: /readyz, port: http }
+    httpGet: {path: /readyz, port: http}
     periodSeconds: 5
     failureThreshold: 2
 
@@ -116,5 +116,5 @@ topologySpread:
   whenUnsatisfiable: ScheduleAnyway
 
 serviceMonitor:
-  enabled: false # requires the Prometheus Operator CRDs
+  enabled: false  # requires the Prometheus Operator CRDs
   interval: 30s
