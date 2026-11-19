@@ -201,6 +201,7 @@ func (s *Server) liveStats(w http.ResponseWriter, r *http.Request) {
 		"circuit_breaker":    s.breaker.State().String(),
 		"provider":           s.opts.Provider,
 		"events":             snap.Events,
+		"last_trace":         snap.LastTrace,
 	})
 }
 
@@ -211,6 +212,7 @@ type createJobRequest struct {
 }
 
 func (s *Server) createJob(w http.ResponseWriter, r *http.Request) {
+	handlerStart := time.Now()
 	p, _ := auth.FromContext(r.Context())
 	r.Body = http.MaxBytesReader(w, r.Body, s.opts.MaxBody)
 	dec := json.NewDecoder(r.Body)
@@ -230,6 +232,7 @@ func (s *Server) createJob(w http.ResponseWriter, r *http.Request) {
 		problem(w, http.StatusBadRequest, "Bad Request", "document_base64: not valid base64")
 		return
 	}
+	decoded := time.Now()
 	job, created, err := s.jobs.Create(r.Context(), p.Tenant, jobs.CreateInput{
 		IdempotencyKey: r.Header.Get("Idempotency-Key"), MediaType: req.MediaType, Document: doc, WebhookURL: req.WebhookURL,
 	})
@@ -244,6 +247,18 @@ func (s *Server) createJob(w http.ResponseWriter, r *http.Request) {
 	default:
 		s.internalError(w, r, err)
 		return
+	}
+	if created && s.stats != nil {
+		inserted := time.Now()
+		reqStart, ok := r.Context().Value(requestStartKey{}).(time.Time)
+		if !ok {
+			reqStart = handlerStart
+		}
+		s.stats.RecordAccept(job.ID.String(), []livestats.Timing{
+			{Name: "auth.verify_jwt", Start: reqStart, End: handlerStart},
+			{Name: "api.decode", Start: handlerStart, End: decoded},
+			{Name: "store.insert", Start: decoded, End: inserted},
+		})
 	}
 	w.Header().Set("Location", "/v1/jobs/"+job.ID.String())
 	if !created {
@@ -392,7 +407,7 @@ func (s *Server) instrument(pattern string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w}
-		next.ServeHTTP(rec, r)
+		next.ServeHTTP(rec, r.WithContext(context.WithValue(r.Context(), requestStartKey{}, start)))
 		if rec.code == 0 {
 			rec.code = http.StatusOK
 		}
@@ -407,6 +422,10 @@ func (s *Server) instrument(pattern string, next http.Handler) http.Handler {
 		}
 	})
 }
+
+// requestStartKey carries the moment a request entered the router, so handlers
+// can time the middleware (auth, rate limit) that ran before them.
+type requestStartKey struct{}
 
 // countsForLiveStats keeps probes, polling and preflights out of the public
 // window so it reflects real API use. The catch-all "/" (404s from scanners)

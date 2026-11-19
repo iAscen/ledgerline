@@ -190,6 +190,21 @@ paths:
                         at: { type: string, format: date-time }
                         kind: { type: string, enum: [http, job] }
                         text: { type: string }
+                  last_trace:
+                    description: Measured timeline of the most recent completed job (null until one completes).
+                    type: [object, "null"]
+                    properties:
+                      job: { type: string, description: First 8 characters of the job ID. }
+                      at: { type: string, format: date-time }
+                      total_ms: { type: number }
+                      spans:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            name: { type: string, enum: [auth.verify_jwt, api.decode, store.insert, queue.wait, provider.extract, store.complete] }
+                            start_ms: { type: number }
+                            duration_ms: { type: number }
   /healthz:
     get:
       tags: [operations]

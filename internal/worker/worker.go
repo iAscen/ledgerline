@@ -149,12 +149,15 @@ func (p *Pool) Process(ctx context.Context, job domain.Job) {
 	log := p.log.With("job_id", job.ID, "attempt", job.Attempts)
 
 	var receipt domain.Receipt
+	var provStart, provEnd time.Time
 	err := p.breaker.Execute(ctx, func(ctx context.Context) error {
 		ctx, pspan := telemetry.Tracer().Start(ctx, "provider.extract", trace.WithAttributes(attribute.String("provider", p.provider.Name())))
 		defer pspan.End()
 		start := time.Now()
+		provStart = start
 		var err error
 		receipt, err = p.provider.Extract(ctx, extract.Document{MediaType: job.MediaType, Data: job.Document})
+		provEnd = time.Now()
 		p.metrics.ProviderTime.WithLabelValues(p.provider.Name()).Observe(time.Since(start).Seconds())
 		p.metrics.ProviderCalls.WithLabelValues(p.provider.Name(), outcome(err)).Inc()
 		if err != nil {
@@ -170,10 +173,15 @@ func (p *Pool) Process(ctx context.Context, job domain.Job) {
 
 	switch {
 	case err == nil:
+		storeStart := time.Now()
 		if serr := p.store.Complete(sctx, job.ID, receipt); serr != nil {
 			log.ErrorContext(ctx, "store result", "err", serr)
 			return // lease expiry will retry the job
 		}
+		p.events.RecordTrace(job.ID.String(), job.ID.String()[:8], job.CreatedAt, []livestats.Timing{
+			{Name: "provider.extract", Start: provStart, End: provEnd},
+			{Name: "store.complete", Start: storeStart, End: time.Now()},
+		})
 		job.Status, job.Result, job.Error = domain.StatusSucceeded, &receipt, ""
 		p.jobEvent(job, "succeeded", job.Attempts)
 		p.finished(ctx, sctx, job, log)

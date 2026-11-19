@@ -138,3 +138,67 @@ func TestConcurrentUse(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestTraceMergesAcceptAndWorkerPhases(t *testing.T) {
+	r := New()
+	t0 := time.Unix(1_700_000_000, 0)
+	at := func(ms int) time.Time { return t0.Add(time.Duration(ms) * time.Millisecond) }
+	r.RecordAccept("job-1", []Timing{
+		{Name: "auth.verify_jwt", Start: at(0), End: at(1)},
+		{Name: "api.decode", Start: at(1), End: at(3)},
+		{Name: "store.insert", Start: at(3), End: at(5)},
+	})
+	r.RecordTrace("job-1", "job1", at(4), []Timing{
+		{Name: "provider.extract", Start: at(20), End: at(320)},
+		{Name: "store.complete", Start: at(320), End: at(322)},
+	})
+	tr := r.Snapshot().LastTrace
+	if tr == nil {
+		t.Fatal("expected a trace")
+	}
+	names := []string{}
+	for _, s := range tr.Spans {
+		names = append(names, s.Name)
+	}
+	want := "auth.verify_jwt api.decode store.insert queue.wait provider.extract store.complete"
+	if got := strings.Join(names, " "); got != want {
+		t.Fatalf("spans = %q, want %q", got, want)
+	}
+	if tr.TotalMs != 322 {
+		t.Fatalf("total = %v, want 322", tr.TotalMs)
+	}
+	q := tr.Spans[3]
+	if q.StartMs != 5 || q.DurMs != 15 {
+		t.Fatalf("queue.wait = %+v, want start 5 dur 15", q)
+	}
+	if len(r.accepts) != 0 || len(r.order) != 0 {
+		t.Fatal("accept entry must be released after the trace completes")
+	}
+}
+
+func TestTraceWithoutAcceptStartsAtCreation(t *testing.T) {
+	r := New()
+	t0 := time.Unix(1_700_000_000, 0)
+	r.RecordTrace("job-2", "job2", t0, []Timing{{Name: "provider.extract", Start: t0.Add(10 * time.Millisecond), End: t0.Add(60 * time.Millisecond)}})
+	tr := r.Snapshot().LastTrace
+	if tr == nil || len(tr.Spans) != 2 || tr.Spans[0].Name != "queue.wait" || tr.TotalMs != 60 {
+		t.Fatalf("unexpected trace: %+v", tr)
+	}
+}
+
+func TestPendingAcceptsAreBounded(t *testing.T) {
+	r := New()
+	now := time.Now()
+	for i := range maxPendingAccepts + 10 {
+		r.RecordAccept(string(rune('A'+i)), []Timing{{Name: "x", Start: now, End: now}})
+	}
+	if len(r.accepts) != maxPendingAccepts || len(r.order) != maxPendingAccepts {
+		t.Fatalf("pending accepts = %d/%d, want %d", len(r.accepts), len(r.order), maxPendingAccepts)
+	}
+}
+
+func TestNoTraceUntilAJobCompletes(t *testing.T) {
+	if New().Snapshot().LastTrace != nil {
+		t.Fatal("last_trace must be null until a real job completes")
+	}
+}

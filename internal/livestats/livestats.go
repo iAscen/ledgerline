@@ -21,6 +21,8 @@ const (
 	maxSamples = 2048
 	// maxEvents is how many recent events the endpoint returns.
 	maxEvents = 8
+	// maxPendingAccepts bounds how many accepted-but-unfinished jobs we remember spans for.
+	maxPendingAccepts = 64
 )
 
 type sample struct {
@@ -36,6 +38,31 @@ type Event struct {
 	Text string    `json:"text"`
 }
 
+// Timing is one measured phase, in wall-clock time.
+type Timing struct {
+	Name       string
+	Start, End time.Time
+}
+
+// Span is one phase of a trace, relative to the trace start, in milliseconds.
+type Span struct {
+	Name    string  `json:"name"`
+	StartMs float64 `json:"start_ms"`
+	DurMs   float64 `json:"duration_ms"`
+}
+
+// Trace is the measured timeline of one real job, from request to stored result.
+type Trace struct {
+	Job     string    `json:"job"`
+	At      time.Time `json:"at"`
+	TotalMs float64   `json:"total_ms"`
+	Spans   []Span    `json:"spans"`
+}
+
+type accept struct {
+	timings []Timing
+}
+
 // Snapshot is the computed view returned by /v1/stats.
 type Snapshot struct {
 	WindowSeconds  int      `json:"window_seconds"`
@@ -44,6 +71,7 @@ type Snapshot struct {
 	P50Ms          *float64 `json:"p50_ms"`     // nil when there were no requests in the window
 	ErrorRate      *float64 `json:"error_rate"` // share of 5xx responses; nil when no requests
 	Events         []Event  `json:"events"`
+	LastTrace      *Trace   `json:"last_trace"` // nil until a job has completed since start
 }
 
 // Recorder is safe for concurrent use. The zero value is not usable; call New.
@@ -55,6 +83,9 @@ type Recorder struct {
 	events  []Event // ring
 	evNext  int
 	evFull  bool
+	accepts map[string]accept
+	order   []string // FIFO of accepts keys, bounded
+	last    *Trace
 	now     func() time.Time
 }
 
@@ -63,6 +94,7 @@ func New() *Recorder {
 	return &Recorder{
 		samples: make([]sample, maxSamples),
 		events:  make([]Event, maxEvents),
+		accepts: map[string]accept{},
 		now:     time.Now,
 	}
 }
@@ -108,6 +140,65 @@ func (r *Recorder) pushEvent(e Event) {
 	}
 }
 
+// RecordAccept stores the API-side phases of a newly created job until the
+// worker finishes it.
+func (r *Recorder) RecordAccept(jobID string, timings []Timing) {
+	if r == nil || len(timings) == 0 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, exists := r.accepts[jobID]; !exists {
+		r.order = append(r.order, jobID)
+	}
+	r.accepts[jobID] = accept{timings: timings}
+	for len(r.order) > maxPendingAccepts {
+		delete(r.accepts, r.order[0])
+		r.order = r.order[1:]
+	}
+}
+
+// RecordTrace completes a job's trace with the worker-side phases and makes it
+// the latest trace. createdAt is used as the queue start when the API phases
+// are unknown (for example after a restart).
+func (r *Recorder) RecordTrace(jobID, shortID string, createdAt time.Time, worker []Timing) {
+	if r == nil || len(worker) == 0 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var all []Timing
+	queueStart := createdAt
+	if a, ok := r.accepts[jobID]; ok {
+		all = append(all, a.timings...)
+		queueStart = a.timings[len(a.timings)-1].End
+		delete(r.accepts, jobID)
+		for i, k := range r.order {
+			if k == jobID {
+				r.order = append(r.order[:i], r.order[i+1:]...)
+				break
+			}
+		}
+	}
+	if q := worker[0].Start; q.After(queueStart) {
+		all = append(all, Timing{Name: "queue.wait", Start: queueStart, End: q})
+	}
+	all = append(all, worker...)
+
+	base := all[0].Start
+	end := base
+	spans := make([]Span, 0, len(all))
+	for _, t := range all {
+		spans = append(spans, Span{Name: t.Name, StartMs: ms(t.Start.Sub(base)), DurMs: ms(t.End.Sub(t.Start))})
+		if t.End.After(end) {
+			end = t.End
+		}
+	}
+	r.last = &Trace{Job: shortID, At: end.UTC(), TotalMs: ms(end.Sub(base)), Spans: spans}
+}
+
+func ms(d time.Duration) float64 { return float64(d.Microseconds()) / 1000 }
+
 // Snapshot computes the current view.
 func (r *Recorder) Snapshot() Snapshot {
 	snap := Snapshot{WindowSeconds: int(Window / time.Second), Events: []Event{}}
@@ -144,6 +235,12 @@ func (r *Recorder) Snapshot() Snapshot {
 		p50 := float64(durations[(len(durations)-1)/2].Microseconds()) / 1000
 		rate := float64(errs) / float64(len(durations))
 		snap.P50Ms, snap.ErrorRate = &p50, &rate
+	}
+
+	if r.last != nil {
+		t := *r.last
+		t.Spans = append([]Span(nil), r.last.Spans...)
+		snap.LastTrace = &t
 	}
 
 	// Events, newest first.
