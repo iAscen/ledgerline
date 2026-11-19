@@ -23,7 +23,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
         with: { go-version-file: go.mod }
-      - uses: golangci/golangci-lint-action@v8
+      - uses: golangci/golangci-lint-action@v9
         with: { version: v2.15.0 }
       - name: sqlc generated code is up to date
         uses: sqlc-dev/setup-sqlc@v4
