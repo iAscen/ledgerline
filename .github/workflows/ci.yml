@@ -131,6 +131,10 @@ jobs:
     needs: [helm, test]
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    env:
+      # Side-loaded into kind; must match deploy/kind/values-kind.yaml (repository: ledgerline, tag: dev).
+      # Overrides the workflow-level GHCR name, which is for publishing (and is not lowercase).
+      IMAGE: ledgerline:dev
     steps:
       - uses: actions/checkout@v5
       - uses: azure/setup-helm@v4
