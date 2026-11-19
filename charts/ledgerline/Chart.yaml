@@ -1,0 +1,14 @@
+apiVersion: v2
+name: ledgerline
+description: Receipt and invoice extraction API (Go) with an async worker pool, circuit breaker, Vault secrets and an MCP endpoint.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.27.0-0"
+home: https://github.com/iAscen/ledgerline
+sources:
+  - https://github.com/iAscen/ledgerline
+maintainers:
+  - name: iAscen
+    url: https://github.com/iAscen
+keywords: [go, receipts, ocr, mcp, vault]

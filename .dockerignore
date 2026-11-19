@@ -1,0 +1,11 @@
+.git
+.github
+bin
+charts
+deploy
+docs
+examples
+*.md
+.env
+.env.*
+coverage.out

@@ -1,0 +1,286 @@
+openapi: 3.1.0
+info:
+  title: Ledgerline API
+  version: 1.0.0
+  summary: Asynchronous receipt and invoice extraction.
+  description: |
+    Submit a receipt image or PDF, get back structured data (merchant, date,
+    taxes, totals, line items). Extraction runs asynchronously; poll the job or
+    receive a signed webhook when it finishes.
+
+    **Idempotency.** `POST /v1/jobs` requires an `Idempotency-Key` header. A
+    retry with the same key and the same body returns the original job
+    (`200` with `Idempotent-Replayed: true`) instead of creating a duplicate.
+    Reusing a key with a different body returns `422`.
+
+    **Webhooks.** Deliveries are `POST`ed as JSON with a
+    `Ledgerline-Signature: t=<unix>,v1=<hex>` header, where `v1` is
+    `HMAC-SHA256(secret, "<t>.<raw body>")`. Reject timestamps older than a few
+    minutes to prevent replay.
+  license:
+    name: MIT
+    identifier: MIT
+servers:
+  - url: http://localhost:8080
+    description: Local (docker compose)
+security:
+  - bearerAuth: []
+tags:
+  - name: jobs
+  - name: operations
+paths:
+  /v1/jobs:
+    post:
+      tags: [jobs]
+      operationId: createJob
+      summary: Submit a document for extraction
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateJobRequest"
+      responses:
+        "202":
+          description: Job accepted and queued.
+          headers:
+            Location:
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Job" }
+        "200":
+          description: Idempotent replay; the original job is returned.
+          headers:
+            Idempotent-Replayed:
+              schema: { type: string, const: "true" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Job" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "413": { $ref: "#/components/responses/Problem" }
+        "422":
+          description: The Idempotency-Key was already used with a different request body.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+    get:
+      tags: [jobs]
+      operationId: listJobs
+      summary: List recent jobs for the caller's tenant
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        "200":
+          description: Jobs, newest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [jobs]
+                properties:
+                  jobs:
+                    type: array
+                    items: { $ref: "#/components/schemas/Job" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+  /v1/jobs/{id}:
+    get:
+      tags: [jobs]
+      operationId: getJob
+      summary: Get a job and, once finished, its result
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: The job. While not terminal, a `Retry-After` header suggests a poll interval.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Job" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+  /v1/demo/token:
+    post:
+      tags: [operations]
+      operationId: demoToken
+      summary: Mint a 15-minute token for a throwaway tenant (public demo only; disabled by default)
+      security: []
+      responses:
+        "201":
+          description: Token issued.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token: { type: string }
+                  token_type: { type: string, const: Bearer }
+                  expires_in: { type: integer }
+                  tenant: { type: string }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+  /v1/status:
+    get:
+      tags: [operations]
+      operationId: status
+      summary: Public service status (CORS-enabled; used by the portfolio status card)
+      security: []
+      responses:
+        "200":
+          description: Service status.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  service: { type: string }
+                  status: { type: string }
+                  version: { type: string }
+                  uptime_seconds: { type: integer }
+                  provider: { type: string, enum: [fake, anthropic] }
+                  store: { type: string, enum: [postgres, memory] }
+                  circuit_breaker: { type: string, enum: [closed, open, half_open] }
+                  region: { type: string }
+  /healthz:
+    get:
+      tags: [operations]
+      operationId: healthz
+      summary: Liveness probe
+      security: []
+      responses:
+        "200": { description: Process is alive. }
+  /readyz:
+    get:
+      tags: [operations]
+      operationId: readyz
+      summary: Readiness probe (checks the database; reports but does not fail on the provider breaker)
+      security: []
+      responses:
+        "200": { description: Ready to serve traffic. }
+        "503": { description: Starting, draining, or database unavailable. }
+  /mcp:
+    post:
+      tags: [operations]
+      operationId: mcp
+      summary: Model Context Protocol endpoint (streamable HTTP transport)
+      description: |
+        Exposes the tools `extract_receipt`, `get_job` and `list_jobs` to MCP
+        clients (AI agents). Uses the same bearer token and tenant scoping as
+        the REST API.
+      responses:
+        "200": { description: MCP JSON-RPC response. }
+        "401": { $ref: "#/components/responses/Problem" }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: HS256 JWT. `sub` is the tenant; `scope` holds `jobs:read` and/or `jobs:write`.
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Client-generated unique key (e.g. a UUID), 1-255 printable ASCII characters.
+      schema: { type: string, minLength: 1, maxLength: 255 }
+  responses:
+    Problem:
+      description: Error (RFC 9457 problem details).
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    TooManyRequests:
+      description: Rate limited.
+      headers:
+        Retry-After:
+          schema: { type: integer }
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+  schemas:
+    CreateJobRequest:
+      type: object
+      additionalProperties: false
+      required: [document_base64, media_type]
+      properties:
+        document_base64:
+          type: string
+          contentEncoding: base64
+          description: The document bytes, base64-encoded (max 5 MiB decoded by default).
+        media_type:
+          type: string
+          enum: [image/jpeg, image/png, image/gif, image/webp, application/pdf]
+        webhook_url:
+          type: string
+          format: uri
+          description: HTTPS endpoint notified when the job finishes. Private and loopback addresses are refused.
+    Job:
+      type: object
+      required: [id, idempotency_key, status, media_type, attempts, next_attempt_at, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        idempotency_key: { type: string }
+        status: { type: string, enum: [queued, processing, succeeded, failed] }
+        media_type: { type: string }
+        webhook_url: { type: string }
+        webhook_status: { type: string, enum: [delivered, failed] }
+        result: { $ref: "#/components/schemas/Receipt" }
+        error: { type: string }
+        attempts: { type: integer }
+        next_attempt_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        completed_at: { type: string, format: date-time }
+    Receipt:
+      type: object
+      description: Extracted receipt. Money amounts are integers in minor units (cents).
+      required: [merchant, currency, subtotal_minor, taxes, total_minor, line_items, confidence, provider]
+      properties:
+        merchant: { type: string }
+        merchant_tax_id: { type: string }
+        date: { type: string, format: date }
+        currency: { type: string, description: ISO 4217 code }
+        subtotal_minor: { type: integer }
+        taxes:
+          type: array
+          items:
+            type: object
+            required: [name, amount_minor]
+            properties:
+              name: { type: string, examples: [GST, QST, HST] }
+              amount_minor: { type: integer }
+        total_minor: { type: integer }
+        payment_method: { type: string }
+        category: { type: string }
+        line_items:
+          type: array
+          items:
+            type: object
+            required: [description, quantity, amount_minor]
+            properties:
+              description: { type: string }
+              quantity: { type: number }
+              amount_minor: { type: integer }
+        confidence: { type: number, minimum: 0, maximum: 1 }
+        provider: { type: string }
+        model: { type: string }
+    Problem:
+      type: object
+      required: [type, title, status]
+      properties:
+        type: { type: string }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }

@@ -1,0 +1,120 @@
+# Default values for ledgerline.
+
+replicaCount: 2
+
+image:
+  repository: ghcr.io/iascen/ledgerline
+  tag: "" # defaults to .Chart.AppVersion
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+  # The projected SA token is how the pod logs in to Vault (Kubernetes auth).
+  automount: true
+
+podAnnotations: {}
+podLabels: {}
+
+service:
+  type: ClusterIP
+  port: 80
+  metricsPort: 9090
+
+# Non-secret configuration, rendered into a ConfigMap (LEDGERLINE_* env vars).
+config:
+  store: postgres
+  provider: fake # fake | anthropic
+  anthropicModel: claude-opus-5-5
+  workerConcurrency: "4"
+  jobTimeout: 2m
+  maxAttempts: "5"
+  breakerThreshold: "5"
+  breakerOpenTimeout: 30s
+  rateLimitRPS: "5"
+  rateLimitBurst: "10"
+  corsOrigins: ""
+  publicDemo: "false"
+  logLevel: info
+  shutdownTimeout: 25s
+  readinessDrain: 5s
+  otlpEndpoint: "" # e.g. http://otel-collector.observability:4318
+
+# Secrets come from Vault (preferred) and/or an existing Kubernetes Secret
+# whose keys are LEDGERLINE_JWT_SECRET, LEDGERLINE_DATABASE_URL, ... (env fallback).
+vault:
+  enabled: false
+  address: http://vault.vault.svc:8200
+  role: ledgerline
+  authMount: kubernetes
+  kvMount: secret
+  kvPath: ledgerline
+  required: true
+existingSecret: ""
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 64Mi
+  limits:
+    memory: 256Mi # no CPU limit: avoids CFS throttling; requests drive scheduling and HPA
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+# Must exceed shutdownTimeout + readinessDrain so the app finishes its own drain.
+terminationGracePeriodSeconds: 40
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]
+
+probes:
+  startup:
+    httpGet: { path: /healthz, port: http }
+    periodSeconds: 2
+    failureThreshold: 30
+  liveness:
+    httpGet: { path: /healthz, port: http }
+    periodSeconds: 10
+    failureThreshold: 3
+  readiness:
+    httpGet: { path: /readyz, port: http }
+    periodSeconds: 5
+    failureThreshold: 2
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Spread replicas across nodes so a single node loss keeps the service up.
+topologySpread:
+  enabled: true
+  maxSkew: 1
+  whenUnsatisfiable: ScheduleAnyway
+
+serviceMonitor:
+  enabled: false # requires the Prometheus Operator CRDs
+  interval: 30s

@@ -1,0 +1,10 @@
+/bin/
+/dist/
+coverage.out
+*.test
+.env
+.env.*
+!.env.example
+charts/*/charts/
+*.tgz
+rendered/

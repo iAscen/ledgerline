@@ -1,0 +1,20 @@
+# Helm values for the kind cluster: local image, secrets from the dev Vault.
+image:
+  repository: ledgerline
+  tag: dev
+  pullPolicy: Never # image is side-loaded with `kind load docker-image`
+
+vault:
+  enabled: true
+  address: http://vault.vault.svc:8200
+  required: true # in-cluster, never silently fall back
+
+config:
+  provider: fake
+  breakerThreshold: "3"
+  breakerOpenTimeout: 20s
+  publicDemo: "true" # lets scripts/smoke.sh get a token without kubectl exec
+
+autoscaling:
+  minReplicas: 2
+  maxReplicas: 4
