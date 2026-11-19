@@ -57,7 +57,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with: { fetch-depth: 0 }
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
       - run: make helm-lint
       - uses: helm/chart-testing-action@v2.7.0
       - name: chart-testing lint
@@ -96,7 +96,7 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
       - name: Render the Helm chart for scanning
         run: mkdir -p rendered && helm template ledgerline charts/ledgerline > rendered/ledgerline.yaml
       - name: Trivy config scan (Dockerfile + rendered Kubernetes manifests)
@@ -130,7 +130,7 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v5
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
       - uses: helm/kind-action@v1
         with:
           cluster_name: ledgerline
