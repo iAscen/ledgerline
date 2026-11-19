@@ -59,6 +59,9 @@ jobs:
         with: { fetch-depth: 0 }
       - uses: azure/setup-helm@v4
       - run: make helm-lint
+      # chart-testing's schema validator (yamale) crashes on Python 3.14, the runner default.
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.12" }
       - uses: helm/chart-testing-action@v2.7.0
       - name: chart-testing lint
         run: ct lint --config ct.yaml --all
@@ -90,7 +93,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Trivy image scan (fail on fixable HIGH/CRITICAL)
-        uses: aquasecurity/trivy-action@0.33.1
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ledgerline:scan
           severity: HIGH,CRITICAL
@@ -100,7 +103,7 @@ jobs:
       - name: Render the Helm chart for scanning
         run: mkdir -p rendered && helm template ledgerline charts/ledgerline > rendered/ledgerline.yaml
       - name: Trivy config scan (Dockerfile + rendered Kubernetes manifests)
-        uses: aquasecurity/trivy-action@0.33.1
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: config
           scan-ref: .
