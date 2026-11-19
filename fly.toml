@@ -5,8 +5,8 @@
 # The demo runs the in-memory store and the fake provider, so it costs nothing
 # beyond one small machine and never spends Anthropic credits. To make it
 # durable: attach Postgres and set LEDGERLINE_STORE=postgres + LEDGERLINE_DATABASE_URL.
-app = "ledgerline"
-primary_region = "yul" # Montréal
+app = "ledgerline-demo"
+primary_region = "yyz" # Toronto (closest to Montréal; Fly retired yul)
 
 [build]
   dockerfile = "Dockerfile"

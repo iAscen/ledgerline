@@ -2,6 +2,8 @@
 
 [![ci](https://github.com/iAscen/ledgerline/actions/workflows/ci.yml/badge.svg)](https://github.com/iAscen/ledgerline/actions/workflows/ci.yml)
 
+**Live demo: <https://ledgerline-demo.fly.dev>**: upload a receipt (or use the built-in sample), watch the async job, resend it to see idempotency, and simulate a provider outage to see the circuit breaker open. Demo mode uses a simulated extractor, so results are realistic but made up.
+
 A production-style Go microservice that turns photos and PDFs of receipts into
 structured data (merchant, date, GST/QST and other taxes, totals, line items)
 using Claude vision, behind an asynchronous, idempotent, rate-limited REST API
@@ -236,7 +238,7 @@ account ([`scripts/vault-setup.sh`](scripts/vault-setup.sh)).
 ### Fly.io (public demo)
 
 ```bash
-fly launch --no-deploy --copy-config      # choose an app name
+fly launch --no-deploy --copy-config      # choose an app name (the live demo is ledgerline-demo, region yyz)
 fly secrets set LEDGERLINE_JWT_SECRET=$(openssl rand -hex 32) LEDGERLINE_WEBHOOK_SECRET=$(openssl rand -hex 32)
 fly deploy
 BASE_URL=https://<app>.fly.dev scripts/smoke.sh
