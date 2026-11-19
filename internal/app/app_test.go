@@ -272,6 +272,14 @@ func TestStatusCORSAndProbes(t *testing.T) {
 	if r, b := e.do("GET", "/openapi.yaml", "", nil, nil); r.StatusCode != http.StatusOK || !bytes.HasPrefix(b, []byte("openapi: 3.1.0")) {
 		t.Fatal("openapi not served")
 	}
+	r, b = e.do("GET", "/", "", nil, nil)
+	if r.StatusCode != http.StatusOK || !strings.Contains(string(b), "<title>ledgerline") ||
+		!strings.Contains(r.Header.Get("Content-Security-Policy"), "frame-ancestors 'none'") {
+		t.Fatalf("demo page: %d csp=%q", r.StatusCode, r.Header.Get("Content-Security-Policy"))
+	}
+	if r, _ := e.do("GET", "/no-such-page", "", nil, nil); r.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown path must 404, got %d", r.StatusCode)
+	}
 }
 
 type bearer struct {

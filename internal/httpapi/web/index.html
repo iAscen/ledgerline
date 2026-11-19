@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ledgerline · live demo</title>
+<meta name="description" content="Try a production-style Go receipt-extraction service: async jobs, idempotency, circuit breaker.">
+<style>
+  :root {
+    --bg: #f7f7f5; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6b66; --line: #e4e4df;
+    --accent: #0b6e4f; --accent-ink: #ffffff; --warn: #b45309; --bad: #b42318; --ok: #0b6e4f;
+    --code: #f1f1ec; --radius: 10px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121211; --panel: #1b1b1a; --ink: #ececea; --muted: #9b9b95; --line: #2c2c2a;
+      --accent: #3ccf91; --accent-ink: #0d1f17; --warn: #f0a33a; --bad: #ff6b5e; --ok: #3ccf91; --code: #232321;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 960px; margin: 0 auto; padding: 32px 16px 64px; }
+  header { display: flex; flex-wrap: wrap; gap: 12px; align-items: baseline; justify-content: space-between; }
+  h1 { font-size: 26px; margin: 0; letter-spacing: -0.01em; }
+  h1 span { color: var(--muted); font-weight: 400; }
+  h2 { font-size: 16px; margin: 0 0 12px; }
+  p { margin: 0 0 10px; }
+  a { color: var(--accent); }
+  .lede { color: var(--muted); max-width: 680px; margin: 8px 0 24px; }
+  .pill { display: inline-flex; align-items: center; gap: 8px; padding: 4px 10px; border: 1px solid var(--line);
+    border-radius: 999px; font-size: 13px; color: var(--muted); background: var(--panel); white-space: nowrap; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; min-width: 0; }
+  .drop { display: block; border: 1.5px dashed var(--line); border-radius: var(--radius); padding: 22px; text-align: center; cursor: pointer;
+    color: var(--muted); transition: border-color .15s; }
+  .drop:hover, .drop.over { border-color: var(--accent); color: var(--ink); }
+  .drop input { display: none; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  button { font: inherit; border-radius: 8px; padding: 8px 14px; cursor: pointer; border: 1px solid var(--line);
+    background: var(--panel); color: var(--ink); }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .preview { margin-top: 12px; display: none; align-items: center; gap: 12px; font-size: 13px; color: var(--muted); }
+  .preview img { width: 56px; height: 72px; object-fit: cover; border-radius: 6px; border: 1px solid var(--line); }
+  ol.timeline { list-style: none; padding: 0; margin: 0; }
+  ol.timeline li { display: flex; gap: 10px; padding: 6px 0; color: var(--muted); font-size: 14px; }
+  ol.timeline li .dot { margin-top: 7px; flex: none; }
+  ol.timeline li.on { color: var(--ink); }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; }
+  .receipt { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 12px; display: none; }
+  .receipt table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  .receipt td { padding: 3px 0; } .receipt td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+  .receipt tr.total td { border-top: 1px solid var(--line); font-weight: 700; padding-top: 6px; }
+  details { margin-top: 10px; } summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+  pre { background: var(--code); border-radius: 8px; padding: 10px; overflow: auto; max-height: 280px; margin: 8px 0 0; }
+  .note { font-size: 13px; color: var(--muted); }
+  .banner { border-left: 3px solid var(--warn); padding: 8px 12px; background: var(--panel); border-radius: 6px; margin-bottom: 16px; font-size: 14px; }
+  .log { font-size: 13px; margin-top: 10px; display: grid; gap: 4px; }
+  .log div { display: flex; gap: 8px; } .log .t { color: var(--muted); flex: none; }
+  .stack { margin-top: 16px; }
+  .stack ul { margin: 6px 0 0; padding-left: 18px; color: var(--muted); font-size: 14px; }
+  footer { margin-top: 28px; font-size: 13px; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>ledgerline <span>· receipt extraction API</span></h1>
+    <span class="pill" id="statusPill"><span class="dot" id="statusDot"></span><span id="statusText">checking…</span></span>
+  </header>
+  <p class="lede">A Go microservice that turns receipt photos into structured data. Upload a receipt and watch the
+    asynchronous pipeline work: the API accepts the job instantly, a worker extracts it in the background, and
+    retries, a circuit breaker and idempotency keys keep it correct when things fail.</p>
+
+  <div class="banner" id="demoBanner">
+    <strong>Demo mode:</strong> this public instance uses a simulated extractor so it costs nothing to run.
+    Results are realistic but made up and do not reflect your image. The production path calls Claude vision;
+    see the <a href="https://github.com/iAscen/ledgerline">source</a>.
+  </div>
+
+  <div class="grid">
+    <section class="card">
+      <h2>1 · Submit a receipt</h2>
+      <label class="drop" id="drop">
+        <input type="file" id="file" accept="image/jpeg,image/png,image/webp,image/gif,application/pdf">
+        <div><strong>Drop a receipt photo or PDF</strong><br><span class="note">or click to choose a file · large photos are resized in your browser</span></div>
+      </label>
+      <div class="preview" id="preview"><img id="previewImg" alt=""><span id="previewText"></span></div>
+      <div class="row">
+        <button id="sample">Use a sample receipt</button>
+        <button class="primary" id="submit" disabled>Extract</button>
+        <button id="again" disabled title="Send the exact same request with the same Idempotency-Key">Send it again</button>
+      </div>
+      <p class="note" style="margin-top:10px" id="keyNote"></p>
+    </section>
+
+    <section class="card">
+      <h2>2 · Watch the job</h2>
+      <ol class="timeline" id="timeline">
+        <li data-s="accepted"><span class="dot"></span><span>Accepted: <span class="note">202, job stored, response returned immediately</span></span></li>
+        <li data-s="queued"><span class="dot"></span><span>Queued</span></li>
+        <li data-s="processing"><span class="dot"></span><span>Processing: <span class="note">a worker claimed it</span></span></li>
+        <li data-s="done"><span class="dot"></span><span id="doneLabel">Finished</span></li>
+      </ol>
+      <div class="receipt" id="receipt">
+        <table id="receiptTable"></table>
+        <details><summary>Raw API response</summary><pre class="mono" id="raw"></pre></details>
+      </div>
+    </section>
+  </div>
+
+  <div class="grid" style="margin-top:16px">
+    <section class="card">
+      <h2>3 · Break the AI provider</h2>
+      <p class="note">Sends documents that make the simulated provider fail like an outage. After a few consecutive
+        failures the <strong>circuit breaker opens</strong>: calls stop, jobs wait in the queue without burning retries,
+        and the API stays up. Then it probes and recovers on its own.</p>
+      <div class="row"><button id="outage">Simulate provider outage</button></div>
+      <div class="log mono" id="outageLog"></div>
+    </section>
+
+    <section class="card">
+      <h2>Under the hood</h2>
+      <div class="stack">
+        <ul>
+          <li>Go 1.26, <code>net/http</code>, Postgres queue with <code>SKIP LOCKED</code> leases</li>
+          <li>Idempotency enforced by the database (<code>INSERT … ON CONFLICT</code>)</li>
+          <li>Exponential backoff with jitter + circuit breaker around the model</li>
+          <li>Kubernetes Helm chart, HashiCorp Vault secrets, OpenTelemetry, Prometheus</li>
+          <li>MCP endpoint so AI agents can call the same extraction as a tool</li>
+        </ul>
+      </div>
+      <p class="note" style="margin-top:12px"><a href="https://github.com/iAscen/ledgerline">Source on GitHub</a> ·
+        <a href="/openapi.yaml">OpenAPI spec</a> · <a href="/v1/status">/v1/status</a></p>
+    </section>
+  </div>
+
+  <footer>Each visitor gets a throwaway 15-minute tenant. Uploaded files are kept in memory only and vanish when the server sleeps.</footer>
+</main>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const MAX_BYTES = 1024 * 1024;
+  let token = null, docB64 = null, mediaType = null, idemKey = null, polling = false;
+
+  // ---------- status pill ----------
+  async function refreshStatus() {
+    try {
+      const s = await (await fetch("/v1/status", { cache: "no-store" })).json();
+      const cb = s.circuit_breaker;
+      $("statusDot").className = "dot " + (cb === "closed" ? "ok" : cb === "open" ? "bad" : "warn");
+      $("statusText").textContent = "online · breaker " + cb.replace("_", "-") + (s.region ? " · " + s.region : "");
+      if (s.provider !== "fake") $("demoBanner").style.display = "none";
+      return cb;
+    } catch { $("statusDot").className = "dot bad"; $("statusText").textContent = "unreachable"; }
+  }
+  refreshStatus(); setInterval(refreshStatus, 3000);
+
+  // ---------- auth ----------
+  async function getToken() {
+    if (token) return token;
+    try {
+      const c = JSON.parse(sessionStorage.getItem("ll_token") || "null");
+      if (c && c.exp > Date.now() + 60000) return (token = c.t);
+    } catch {}
+    const r = await fetch("/v1/demo/token", { method: "POST" });
+    if (r.status === 404) throw new Error("The public demo is disabled on this server.");
+    if (r.status === 429) throw new Error("Too many demo sessions from your network; try again in a minute.");
+    if (!r.ok) throw new Error("Could not start a demo session (HTTP " + r.status + ").");
+    const j = await r.json();
+    token = j.access_token;
+    try { sessionStorage.setItem("ll_token", JSON.stringify({ t: token, exp: Date.now() + j.expires_in * 1000 })); } catch {}
+    return token;
+  }
+
+  async function api(path, opts = {}) {
+    const t = await getToken();
+    for (let i = 0; i < 5; i++) {
+      const r = await fetch(path, { ...opts, headers: { ...(opts.headers || {}), Authorization: "Bearer " + t } });
+      if (r.status === 429) { await sleep(1000 * Number(r.headers.get("Retry-After") || 1)); continue; }
+      if (r.status === 401) { token = null; sessionStorage.removeItem("ll_token"); }
+      return r;
+    }
+    throw new Error("Rate limited, please slow down.");
+  }
+  const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+
+  // ---------- file handling ----------
+  function blobToB64(blob) {
+    return new Promise((res, rej) => {
+      const fr = new FileReader();
+      fr.onload = () => res(String(fr.result).split(",")[1]);
+      fr.onerror = rej; fr.readAsDataURL(blob);
+    });
+  }
+  async function downscale(file) {
+    const img = await createImageBitmap(file);
+    const scale = Math.min(1, 1600 / Math.max(img.width, img.height));
+    const c = document.createElement("canvas");
+    c.width = Math.round(img.width * scale); c.height = Math.round(img.height * scale);
+    c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+    return new Promise((res) => c.toBlob(res, "image/jpeg", 0.85));
+  }
+  async function setDocument(blob, type, label, previewURL) {
+    if (type !== "application/pdf" && (blob.size > MAX_BYTES || type === "image/heic")) {
+      blob = await downscale(blob); type = "image/jpeg";
+    }
+    if (blob.size > MAX_BYTES) { alert("That file is over 1 MB even after resizing. Try a smaller one."); return; }
+    docB64 = await blobToB64(blob); mediaType = type; idemKey = null;
+    $("preview").style.display = "flex";
+    $("previewImg").src = previewURL || "";
+    $("previewImg").style.display = previewURL ? "block" : "none";
+    $("previewText").textContent = label + " · " + Math.round(blob.size / 1024) + " KB · " + type;
+    $("submit").disabled = false; $("again").disabled = true; $("keyNote").textContent = "";
+  }
+  $("file").addEventListener("change", (e) => pick(e.target.files[0]));
+  const drop = $("drop");
+  ["dragover", "dragenter"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
+  ["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, () => drop.classList.remove("over")));
+  drop.addEventListener("drop", (e) => { e.preventDefault(); pick(e.dataTransfer.files[0]); });
+  function pick(f) {
+    if (!f) return;
+    const ok = ["image/jpeg", "image/png", "image/webp", "image/gif", "application/pdf"];
+    if (!ok.includes(f.type)) { alert("Please use a JPEG, PNG, WebP, GIF or PDF."); return; }
+    setDocument(f, f.type, f.name, f.type.startsWith("image/") ? URL.createObjectURL(f) : null);
+  }
+
+  // ---------- sample receipt (drawn locally) ----------
+  function drawReceipt(extra) {
+    const c = document.createElement("canvas"); c.width = 360; c.height = 520;
+    const g = c.getContext("2d");
+    g.fillStyle = "#fffdf7"; g.fillRect(0, 0, c.width, c.height);
+    g.fillStyle = "#222"; g.textAlign = "center";
+    g.font = "bold 22px monospace"; g.fillText("CAFÉ DU PLATEAU", 180, 46);
+    g.font = "13px monospace"; g.fillText("4321 rue St-Denis, Montréal QC", 180, 68);
+    g.fillText("TPS 123456789 RT0001", 180, 86);
+    g.fillText(new Date().toLocaleDateString("fr-CA") + "  " + new Date().toLocaleTimeString("fr-CA", { hour: "2-digit", minute: "2-digit" }), 180, 104);
+    g.textAlign = "left"; g.font = "15px monospace";
+    const items = [["Latte", "5,25"], ["Croissant amandes", "4,50"], ["Bagel saumon", "11,75"]];
+    items.forEach(([n, p], i) => { g.fillText(n, 28, 150 + i * 26); g.textAlign = "right"; g.fillText(p, 332, 150 + i * 26); g.textAlign = "left"; });
+    g.fillRect(28, 236, 304, 1);
+    [["Sous-total", "21,50"], ["TPS 5%", "1,08"], ["TVQ 9,975%", "2,14"]].forEach(([n, p], i) => {
+      g.fillText(n, 28, 264 + i * 24); g.textAlign = "right"; g.fillText(p, 332, 264 + i * 24); g.textAlign = "left"; });
+    g.font = "bold 17px monospace"; g.fillText("TOTAL", 28, 352); g.textAlign = "right"; g.fillText("24,72 $", 332, 352);
+    g.textAlign = "center"; g.font = "13px monospace"; g.fillText("VISA ****4242  APPROUVÉ", 180, 400); g.fillText("Merci et à bientôt!", 180, 430);
+    return new Promise((res) => c.toBlob(async (png) => {
+      res({ blob: extra ? new Blob([png, extra]) : png, url: URL.createObjectURL(png) });
+    }, "image/png"));
+  }
+  $("sample").addEventListener("click", async () => {
+    const { blob, url } = await drawReceipt("sample " + Date.now());
+    setDocument(blob, "image/png", "sample-receipt.png", url);
+  });
+
+  // ---------- submit + poll ----------
+  function stage(name, label) {
+    const order = ["accepted", "queued", "processing", "done"];
+    const idx = order.indexOf(name);
+    document.querySelectorAll("#timeline li").forEach((li, i) => {
+      li.classList.toggle("on", i <= idx);
+      li.querySelector(".dot").className = "dot" + (i < idx ? " ok" : i === idx ? (name === "done" && label === "failed" ? " bad" : " ok") : "");
+    });
+  }
+  async function submit(isRetry) {
+    if (!docB64 || polling) return;
+    if (!isRetry || !idemKey) idemKey = "demo-" + crypto.randomUUID();
+    $("submit").disabled = true; $("again").disabled = true;
+    $("receipt").style.display = "none"; $("doneLabel").textContent = "Finished"; stage("", "");
+    try {
+      const r = await api("/v1/jobs", { method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": idemKey },
+        body: JSON.stringify({ document_base64: docB64, media_type: mediaType }) });
+      const body = await r.json();
+      if (!r.ok) throw new Error(body.detail || body.title || "HTTP " + r.status);
+      const replay = r.headers.get("Idempotent-Replayed") === "true";
+      $("keyNote").innerHTML = replay
+        ? `Same <span class="mono">Idempotency-Key</span>: the server returned the <strong>existing job</strong> (HTTP 200) instead of creating a duplicate. Job <span class="mono">${body.id.slice(0, 8)}</span>.`
+        : `Job <span class="mono">${body.id.slice(0, 8)}</span> created (HTTP ${r.status}) with key <span class="mono">${idemKey.slice(0, 18)}…</span>. Click “Send it again” to retry the same request.`;
+      stage("accepted");
+      await poll(body.id);
+    } catch (e) { alert(e.message); }
+    finally { $("submit").disabled = false; $("again").disabled = !idemKey; }
+  }
+  async function poll(id) {
+    polling = true;
+    try {
+      for (let i = 0; i < 90; i++) {
+        const j = await (await api("/v1/jobs/" + id)).json();
+        if (j.status === "queued") stage(j.attempts > 0 ? "processing" : "queued");
+        if (j.status === "processing") stage("processing");
+        if (j.status === "succeeded" || j.status === "failed") {
+          stage("done", j.status);
+          $("doneLabel").textContent = j.status === "succeeded" ? `Succeeded after ${j.attempts} attempt${j.attempts > 1 ? "s" : ""}` : "Failed: " + j.error;
+          render(j); return;
+        }
+        await sleep(1000);
+      }
+    } finally { polling = false; }
+  }
+  const money = (m, cur) => (m / 100).toLocaleString("en-CA", { style: "currency", currency: cur || "CAD" });
+  function render(j) {
+    const t = $("receiptTable"); t.innerHTML = "";
+    const row = (a, b, cls) => { const tr = t.insertRow(); if (cls) tr.className = cls; tr.insertCell().textContent = a; tr.insertCell().textContent = b; };
+    if (j.result) {
+      const r = j.result;
+      row("Merchant", r.merchant); if (r.date) row("Date", r.date); if (r.category) row("Category", r.category);
+      row("Subtotal", money(r.subtotal_minor, r.currency));
+      (r.taxes || []).forEach((x) => row(x.name, money(x.amount_minor, r.currency)));
+      row("Total", money(r.total_minor, r.currency), "total");
+      if (r.provider === "fake") row("Simulated result (demo mode)", "", "note");
+    }
+    $("raw").textContent = JSON.stringify(j, null, 2);
+    $("receipt").style.display = "block";
+  }
+  $("submit").addEventListener("click", () => submit(false));
+  $("again").addEventListener("click", () => submit(true));
+
+  // ---------- outage simulation ----------
+  const log = (msg) => {
+    const d = document.createElement("div");
+    d.innerHTML = `<span class="t">${new Date().toLocaleTimeString()}</span><span></span>`;
+    d.lastChild.textContent = msg; $("outageLog").prepend(d);
+  };
+  $("outage").addEventListener("click", async () => {
+    $("outage").disabled = true; $("outageLog").innerHTML = "";
+    try {
+      log("sending 4 documents that make the provider fail…");
+      for (let i = 0; i < 4; i++) {
+        const { blob } = await drawReceipt("LEDGERLINE_FAIL " + crypto.randomUUID());
+        const b64 = await blobToB64(blob);
+        const r = await api("/v1/jobs", { method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": "outage-" + crypto.randomUUID() },
+          body: JSON.stringify({ document_base64: b64, media_type: "image/png" }) });
+        log(`job ${i + 1} accepted (HTTP ${r.status}): the API keeps accepting work`);
+      }
+      let last = null;
+      for (let i = 0; i < 120; i++) {
+        const cb = await refreshStatus();
+        if (cb && cb !== last) {
+          log({ closed: last ? "breaker CLOSED: provider healthy again" : "breaker closed: provider calls failing, retrying with backoff…",
+                open: "breaker OPEN: provider calls short-circuited, jobs wait without burning retries",
+                half_open: "breaker HALF-OPEN: letting one probe request through" }[cb]);
+          last = cb;
+        }
+        if (cb === "open") {
+          const r = await fetch("/readyz"); log(`/readyz → ${r.status}: pods stay in rotation, no cascading outage`);
+          break;
+        }
+        await sleep(1000);
+      }
+      log("these test documents always fail, so the 4 jobs end as failed after 3 attempts; in a real outage the next probe succeeds, the breaker closes and the queue drains");
+    } catch (e) { log("error: " + e.message); }
+    finally { setTimeout(() => ($("outage").disabled = false), 15000); }
+  });
+})();
+</script>
+</body>
+</html>

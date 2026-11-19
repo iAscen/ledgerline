@@ -3,6 +3,7 @@ package httpapi
 
 import (
 	"context"
+	_ "embed"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -74,6 +75,7 @@ func (s *Server) Handler() http.Handler {
 	route("GET /readyz", s.readyz)
 	route("GET /v1/status", s.cors(s.status))
 	route("OPTIONS /v1/status", s.cors(func(http.ResponseWriter, *http.Request) {}))
+	route("GET /{$}", s.demoPage)
 	route("GET /openapi.yaml", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/yaml")
 		_, _ = w.Write(api.OpenAPI)
@@ -110,6 +112,21 @@ func (s *Server) AdminHandler() http.Handler {
 }
 
 // --- handlers ---------------------------------------------------------------
+
+//go:embed web/index.html
+var demoHTML []byte
+
+// demoPage serves the self-contained interactive demo (no external assets).
+func (s *Server) demoPage(w http.ResponseWriter, _ *http.Request) {
+	h := w.Header()
+	h.Set("Content-Type", "text/html; charset=utf-8")
+	h.Set("Cache-Control", "no-cache") // revalidate so a deploy is visible immediately
+	h.Set("Content-Security-Policy", "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "+
+		"img-src 'self' blob: data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Referrer-Policy", "no-referrer")
+	_, _ = w.Write(demoHTML)
+}
 
 func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})

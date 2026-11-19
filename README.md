@@ -15,7 +15,7 @@ in production.
 | | |
 |---|---|
 | **Go** | Go 1.26, `net/http` routing, `slog`, pgx + sqlc, goose migrations, no web framework |
-| **API** | OpenAPI 3.1 ([`api/openapi.yaml`](api/openapi.yaml)), JWT auth with scopes, `Idempotency-Key`, RFC 9457 errors, per-tenant rate limits |
+| **API** | Interactive demo page at `/`, OpenAPI 3.1 ([`api/openapi.yaml`](api/openapi.yaml)), JWT auth with scopes, `Idempotency-Key`, RFC 9457 errors, per-tenant rate limits |
 | **Async pipeline** | Postgres-backed queue (`FOR UPDATE SKIP LOCKED`, leases), retries with exponential backoff + jitter, circuit breaker, signed webhooks |
 | **AI** | Claude vision via the official Anthropic Go SDK with structured JSON output; MCP server (official Go SDK) exposing the same use cases as tools |
 | **Kubernetes** | Helm chart (Deployment, Service, HPA, PDB, ConfigMap, ServiceAccount, probes, limits, hardened security context), kind cluster |
@@ -149,7 +149,8 @@ docker compose up --build -d
 BASE_URL=http://localhost:8080 CHECK_BREAKER=1 scripts/smoke.sh
 ```
 
-* API: <http://localhost:8080> · OpenAPI: <http://localhost:8080/openapi.yaml>
+* **Interactive demo page: <http://localhost:8080>** (upload a receipt, watch the job, simulate an outage)
+* OpenAPI: <http://localhost:8080/openapi.yaml>
 * Metrics: <http://localhost:9090/metrics> · Traces: <http://localhost:16686>
 
 By default the **fake provider** is used: deterministic results, no API key, no
@@ -240,6 +241,13 @@ fly secrets set LEDGERLINE_JWT_SECRET=$(openssl rand -hex 32) LEDGERLINE_WEBHOOK
 fly deploy
 BASE_URL=https://<app>.fly.dev scripts/smoke.sh
 ```
+
+Visitors open `https://<app>.fly.dev/` and get the interactive demo page: drop
+in a receipt (or draw a sample one in the browser), watch it go
+queued → processing → succeeded, resend it to see the idempotency key return
+the same job, and press "Simulate provider outage" to watch the circuit breaker
+open while `/readyz` stays green. The page is one self-contained HTML file
+embedded in the binary (no external scripts, strict CSP).
 
 The demo runs the in-memory store and the fake provider, so it costs one small
 machine and never spends API credits. `GET /v1/status` is public and
